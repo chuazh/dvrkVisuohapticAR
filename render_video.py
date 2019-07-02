@@ -373,7 +373,7 @@ class camera_module:
 		s = np.clip(s, 0, 255)
 		#print(np.linalg.norm(np.array([self.force,self.forceY,self.forceZ])))
 		
-		if np.abs(self.force) < 10:
+		if np.abs(self.force) < sat_force:
 			image_hsv[idx] = np.array([128,s,255]) # color the pixels with our desired value
 		else:
 			image_hsv[idx] = np.array([200,255,50]) # color the pixels with our desired value
