@@ -8,6 +8,7 @@ from geometry_msgs.msg import Wrench, Pose
 import argparse
 import numpy as np
 import copy
+import pyaudio
 
 class camera_module:
 	def __init__(self,side,condition,debug,palpate):
@@ -21,7 +22,8 @@ class camera_module:
 		sub_cam_reset = rospy.Subscriber('/cam_reset',Bool,self.cam_reset_callback, queue_size = 100)
 		sub_teleop_pedal = rospy.Subscriber('/dvrk/footpedals/coag',Joy,self.teleop_callback, queue_size = 100)
 		sub_PSM_pos = rospy.Subscriber('/ep_pose',Pose,self.get_position, queue_size = 100)
-		sub_advance_trial = rospy.Subscriber('/advance_trial',Bool,self.advance_callback2,queue_size = 100)
+		#sub_advance_trial = rospy.Subscriber('/advance_trial',Bool,self.advance_callback2,queue_size = 100)
+		sub_advance_trial = rospy.Subscriber('/dvrk/footpedals/camera',Joy,self.advance_callback,queue_size = 100)
 		
 		if self.side == "left":
 			self.image_sub = rospy.Subscriber('/camera/left/image_color',Image,self.image_callback)
@@ -46,6 +48,19 @@ class camera_module:
 		self.advance_flag = False
 		self.trial_begin = False
 		
+		if self.side == 'right':
+			self.sound_flag = 0
+			self.sound = pyaudio.PyAudio()
+			self.framerate = 44100
+			# open stream using callback
+			self.stream = self.sound.open(format = self.sound.get_format_from_width(1),
+		        channels = 1,
+		        rate= int(self.framerate),
+		        frames_per_buffer = 16000,
+		        output=True,
+		        stream_callback = self.audio_callback)
+		
+		'''
 		#stuff for color masking
 		self.color_timer_overlay = cv2.imread("overlay.png", cv2.IMREAD_UNCHANGED);
 		self.hsv_im = cv2.cvtColor(self.color_timer_overlay,cv2.COLOR_BGR2HSV) # get a HSV version of the image
@@ -57,6 +72,7 @@ class camera_module:
 		m,n = np.shape(self.color_timer_overlay[:,:,3])
 		self.alpha_mask = np.reshape(1-(self.color_timer_overlay[:,:,3].astype(float)/255),(m,n,1))
 		self.alpha_mask_inv = np.reshape(self.color_timer_overlay[:,:,3].astype(float)/255,(m,n,1))
+		'''
 		
 	def image_callback(self,msg):
 		
@@ -66,17 +82,20 @@ class camera_module:
 		
 		image = self.bridge.imgmsg_to_cv2(msg,desired_encoding="bgr8") #transfer image from ros stream into open cv
 		
-		image = self.crop_and_move(image,self.displacement,720) # crop the image and perturb it randomly
+		if self.palpate:
+			image = self.crop_and_move(image,0,720)
+		else:
+			image = self.crop_and_move(image,self.displacement,720) # crop the image and perturb it randomly
 		
 		aug_image = self.augment_image(image) # add our augmented reality effects
 		
 		#aug_image = self.decrease_brightness(aug_image,1)
-		
+			
 		if self.side == "left":
 			cv2.namedWindow("left", flags= 16)
 			cv2.imshow("left",aug_image)
 			cv2.moveWindow("left", 2000, 0)
-			cv2.setWindowProperty("left", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN) 
+			cv2.setWindowProperty("left", cv2.WND_PROP_FULLSCREEN, 1) 
 				
 		elif self.side == "center":
 			
@@ -92,8 +111,8 @@ class camera_module:
 			cv2.namedWindow("right", flags= 16)
 			cv2.imshow("right",aug_image)
 			cv2.moveWindow("right", 3000, 0)
-			cv2.setWindowProperty("right", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-			
+			#cv2.setWindowProperty("right", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+			cv2.setWindowProperty("right", cv2.WND_PROP_FULLSCREEN, 1)
 		
 		cv2.waitKey(3)
 		
@@ -130,7 +149,12 @@ class camera_module:
 		else:
 			outputImage = image
 		
-		outputImage = self.time_varying_color_border(outputImage,time)
+		if self.side == 'right':
+			if time > 5 and self.trial_begin == True:
+				self.stream.start_stream()
+			elif self.trial_begin == False:
+				self.trial_begin_time = copy.copy(self.current_time)
+				self.stream.stop_stream()
 		
 		# get boundary of this text
 		textsize = cv2.getTextSize(self.text, self.font, self.fontScale, self.lineType)[0]
@@ -165,8 +189,8 @@ class camera_module:
 		
 		# use this if statement to check if we are starting our trial
 		if ('Go!!!' in self.text and self.trial_begin==False):
-    			self.trial_begin = True
     			self.trial_begin_time = copy.copy(self.current_time)
+    			self.trial_begin = True
 		
 	def teleop_callback(self,data):
 		if self.trial_begin:
@@ -179,7 +203,21 @@ class camera_module:
 	def advance_callback2(self,data):
 		if data.data == True:
 			self.advance_flag = True
-			 
+		
+	def audio_callback(self,in_data,frame_count,time_info,status):
+		
+		time = self.current_time-self.trial_begin_time #get the current timing
+		numTimeSteps = 1.0/self.framerate * frame_count
+		t = np.linspace(time, time+numTimeSteps,frame_count,endpoint=False)
+		frequency = 4000.0
+		omega = 2.0*np.pi*frequency
+		data = np.sin(t*omega)
+		data = np.array((data+1.0)*127.5,dtype=np.int8).tostring()
+
+		cont_flag = pyaudio.paContinue
+		
+		return (data,cont_flag)
+				 
 	def cam_reset_callback(self,data):
 		self.displacement = np.random.random_integers(-30,100,1)[0]
 		if self.trial_begin:
@@ -322,15 +360,17 @@ class camera_module:
 		
 		#scaled color according to force
 		#calib_constant = 1.5/40.0
-		calib_constant = 1.5/40.0
+		init = 255
+		sat_force = 9.0
+		calib_constant = sat_force/init
+		
 		
 		if self.palpate == 1:
-			s = int(200+self.force/calib_constant) # this is for in compression
+			s = int(init+self.force/calib_constant) # this is for in compression
 		else:
-			s = int(200-self.force/calib_constant) # this is for in tension
+			s = int(init-self.force/calib_constant) # this is for in tension
 		
 		s = np.clip(s, 0, 255)
-		
 		#print(np.linalg.norm(np.array([self.force,self.forceY,self.forceZ])))
 		
 		if np.abs(self.force) < 10:
@@ -340,7 +380,7 @@ class camera_module:
 		
 				
 		overlay = cv2.cvtColor(image_hsv,cv2.COLOR_HSV2RGB) # convert this image back to BGR and use it as an overlay
-		alpha = 0.2 # 0.5
+		alpha = 0.3 # 0.5
 		cv2.addWeighted(overlay, alpha, image, 1 - alpha,0, image)
 		
 		return image
