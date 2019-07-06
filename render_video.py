@@ -24,6 +24,7 @@ class camera_module:
 		sub_PSM_pos = rospy.Subscriber('/ep_pose',Pose,self.get_position, queue_size = 100)
 		#sub_advance_trial = rospy.Subscriber('/advance_trial',Bool,self.advance_callback2,queue_size = 100)
 		sub_advance_trial = rospy.Subscriber('/dvrk/footpedals/camera',Joy,self.advance_callback,queue_size = 100)
+		sub_catch = rospy.Subscriber('/catch_trial',Bool,self.catch_callback,queue_size =100)
 		
 		if self.side == "left":
 			self.image_sub = rospy.Subscriber('/camera/left/image_color',Image,self.image_callback)
@@ -47,6 +48,7 @@ class camera_module:
 		
 		self.advance_flag = False
 		self.trial_begin = False
+		self.catch_flag = False
 		
 		if self.side == 'right':
 			self.sound_flag = 0
@@ -203,6 +205,10 @@ class camera_module:
 	def advance_callback2(self,data):
 		if data.data == True:
 			self.advance_flag = True
+	
+	def catch_callback(self,data):
+		self.catch_flag = data.data
+		
 		
 	def audio_callback(self,in_data,frame_count,time_info,status):
 		
@@ -361,7 +367,10 @@ class camera_module:
 		#scaled color according to force
 		#calib_constant = 1.5/40.0
 		init = 255
-		sat_force = 9.0
+		if self.catch_flag == False:
+			sat_force = 9.0
+		else:
+			sat_force = 200.0
 		calib_constant = sat_force/init
 		
 		
