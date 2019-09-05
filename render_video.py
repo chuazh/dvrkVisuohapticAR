@@ -4,27 +4,33 @@ import rospy
 import cv2,cv_bridge
 from sensor_msgs.msg import Image, Joy
 from std_msgs.msg import String, Bool
-from geometry_msgs.msg import Wrench, Pose
+from geometry_msgs.msg import Wrench, Pose, WrenchStamped
 import argparse
 import numpy as np
 import copy
 import pyaudio
 
 class camera_module:
-	def __init__(self,side,condition,debug,palpate):
+	def __init__(self,side,condition,debug,palpate,debug_force):
 		self.bridge = cv_bridge.CvBridge()
 		self.side = side
 		self.text = "Initialized"
 		
 		# Declare our subscribers
 		sub = rospy.Subscriber('/force_msg',String,self.msg_callback, queue_size = 100)
-		sub_force = rospy.Subscriber('/force_sensor',Wrench,self.force_callback, queue_size = 100)
 		sub_cam_reset = rospy.Subscriber('/cam_reset',Bool,self.cam_reset_callback, queue_size = 100)
 		sub_teleop_pedal = rospy.Subscriber('/dvrk/footpedals/coag',Joy,self.teleop_callback, queue_size = 100)
-		sub_PSM_pos = rospy.Subscriber('/ep_pose',Pose,self.get_position, queue_size = 100)
-		#sub_advance_trial = rospy.Subscriber('/advance_trial',Bool,self.advance_callback2,queue_size = 100)
-		sub_advance_trial = rospy.Subscriber('/dvrk/footpedals/camera',Joy,self.advance_callback,queue_size = 100)
+
+		sub_advance_trial = rospy.Subscriber('/advance_trial',Bool,self.advance_callback2,queue_size = 100)
+		#sub_advance_trial = rospy.Subscriber('/dvrk/footpedals/camera',Joy,self.advance_callback,queue_size = 100)
 		sub_catch = rospy.Subscriber('/catch_trial',Bool,self.catch_callback,queue_size =100)
+		sub_force = rospy.Subscriber('/force_sensor',Wrench,self.force_callback, queue_size = 100)
+		
+		if debug:
+			sub_PSM_pos = rospy.Subscriber('/ep_pose',Pose,self.get_position, queue_size = 100)	
+		
+		if debug_force:
+			sub_wrench = rospy.Subscriber('/dvrk/MTMR/wrench_body_current',WrenchStamped,self.wrench_callback,queue_size = 100)
 		
 		if self.side == "left":
 			self.image_sub = rospy.Subscriber('/camera/left/image_color',Image,self.image_callback)
@@ -41,6 +47,7 @@ class camera_module:
 		self.condition = condition
 		self.displacement = 0
 		self.force = 0
+		self.debug_force = debug_force
 		
 		self.current_time = 0
 		self.trial_begin_time = 0
@@ -176,7 +183,10 @@ class camera_module:
 		
 		if self.debug == True:
 			self.text = '%.3f' % self.force + ',' + '%.3f' % self.forceY + ',' + '%.3f' % self.forceZ
-			self.text2 = '%.3f' % self.x + ',' + '%.3f' % self.y+ ',' + '%.3f' % self.z
+			if self.debug_force == True:
+				self.text2 = '%.3f' % self.wrench_x + ',' + '%.3f' % self.wrench_y + ',' + '%.3f' % self.wrench_z
+			else:
+				self.text2 = '%.3f' % self.x + ',' + '%.3f' % self.y+ ',' + '%.3f' % self.z
 			#self.text2 = ' '
 			cv2.putText(outputImage,self.text2, bottomLeftCornerOfText2, self.font, self.fontScale,self.fontColor,self.lineType)
 			
@@ -228,6 +238,11 @@ class camera_module:
 		self.displacement = np.random.random_integers(-30,100,1)[0]
 		if self.trial_begin:
 			self.trial_begin = False # if the user didn't advance the trial by flipping the advance_trial flag and the timer expired
+	
+	def wrench_callback(self,data):	
+		self.wrench_x = data.wrench.force.x 
+		self.wrench_y = data.wrench.force.y
+		self.wrench_z = data.wrench.force.z
 	
 	def get_position(self,data):
 		self.x = data.position.x
@@ -368,9 +383,10 @@ class camera_module:
 		#calib_constant = 1.5/40.0
 		init = 255
 		if self.catch_flag == False:
-			sat_force = 9.0
+			#sat_force = 4.0
+			sat_force = 8.4
 		else:
-			sat_force = 200.0
+			sat_force = 16.0
 		calib_constant = sat_force/init
 		
 		
@@ -403,16 +419,16 @@ parser.add_argument("side", help="specify display side",type=str)
 parser.add_argument("haptics", help="condition",type=str)
 parser.add_argument("--palpate", help="palpate condition", type=int)
 parser.add_argument("--debug", type=bool)
+parser.add_argument("--debug_force", type = bool)
 args = parser.parse_args()
 nodename = "cameraDisplay_" + args.side
 rospy.init_node(nodename)
 rate = rospy.Rate(1000)
 np.random.seed(9001)
 if args.debug: 
-	cam = camera_module(args.side,args.haptics,True,args.palpate)
+	cam = camera_module(args.side,args.haptics,True,args.palpate,args.debug_force)
 else:
-	
-	cam = camera_module(args.side,args.haptics,False,args.palpate)
+	cam = camera_module(args.side,args.haptics,False,args.palpate,args.debug_force)
 rospy.spin()
 		
 
